@@ -24,11 +24,26 @@ function initMap() {
 
 }
 
+var socket = io.connect('http://' + document.domain + ':' + location.port);
+socket.on('success', function() {
+    console.log("socketio success");
+});
+
+
+var markers = [],  // an array of all markers objects
+    markersArr = [], // an array of markers according to types of incidents
+    heatDataAll = [],
+    heatDataTraffic = [],
+    heatDataBurglary = [];
+
+
 /* On submit button: get data from left menu bar, if date is not filled,
  * alert message until user fills in data;
- * calls to formulate data correctly */
+ * calls to formulate data correctly 
+ * socket emit start and end date to retrieve data*/
 var types = [];  // types of markers already on map
 function getData() {
+    prepMarkers();
     types.length = 0;
     types = [];
     var mongo_Address = document.getElementById('mongoDB').value,
@@ -38,43 +53,42 @@ function getData() {
         end_Date = document.getElementById('date2').value,
         end_Hour = document.getElementById('hour2').value;
 
-    if (start_Date==="") {
+    if  (start_Hour === "") {
+        start_Hour = 0;
+    }
+    if (end_Hour === "") {
+        end_Hour = 23;
+    }
+
+    if (start_Date==="" || end_Date==="") {
         alert("Date must be filled!!!");
     } else {
-        formulateDate(start_Date, end_Date, start_Hour, end_Hour);
+        socket.emit('get_date', {
+            'start': start_Date+" "+start_Hour.toString()+" 0", 
+            'end': end_Date + " "+ end_Hour.toString()+" 59"
+        });
     }
 }
 
-/* formulate date entered, if hours are left blank, enter default values
- * set markers based on data and start and end date/time */
-function formulateDate(date1, date2, hour1, hour2) {
-    var start_year = date1.substring(0,4),
-        start_month = date1.substring(5,7),
-        start_day = date1.substring(8,10),
-        end_year = date2.substring(0,4),
-        end_month = date2.substring(5,7),
-        end_day = date2.substring(8,10),
-        start_hour = hour1,
-        end_hour = hour2;
-
-    if  (start_hour === "") {
-        start_hour = 0;
+/*
+ * reset markers everytime user hits "submit"
+ */
+function prepMarkers() {
+    document.getElementById('markers').innerHTML = 'Hide Markers';
+    // remove markers from the map, but still keeps them in the array
+    for (var i = 0; i < markers.length; i++) {
+        markers[i].setMap(null);
     }
-    if (end_hour === "") {
-        end_hour = 24;
-    }
+    // delete all by removing reference to them,
+    // so that when user hit "submit" again, previous markers are gone
+    markers = [];
+    markers.length = 0;
+    heatDataAll.length = 0;
+    markersArr = [];
+    markersArr.length = 0;
 
-    var startDate = new Date();
-    startDate.setFullYear(Number(start_year), Number(start_month)-1, Number(start_day));
-    startDate.setHours(Number(start_hour),0,0,0);
-
-    var endDate = new Date();
-    endDate.setFullYear(Number(end_year), Number(end_month)-1, Number(end_day));
-    endDate.setHours(Number(end_hour),0,0,0);
-
-    setMarkers(startDate, endDate);
+    console.log("markersArr length:   "+ markersArr.length+ "\n   "+markersArr);    
 }
-
 
 // create floating panel for map
 function CenterControl(controlDiv, map) {
@@ -112,93 +126,35 @@ function CenterControl(controlDiv, map) {
     );
 }
 
-// turn json file to .js file
-var json = (function() {
-    var json = null;
-    $.ajax({
-        'async': false,
-        'global': false,
-        'url': "package.json", // there are only 3957 data points in this json file
-        'dataType': "json",
-        'success': function (data) {
-            json = data;
-        }
-    });
-    return json;
-})();
 
-// read csv file
-$(document).ready(function() {
-    $.ajax({
-        type: "GET",
-        url: "burglarySnapshot.csv",
-        dataType: "text",
-        success: function(data) {getBurglary(data);}
-    });
+// socket 
+var data_burglary;
+socket.on('burglary_data', function(msg) {
+    // console.log(msg);
+    data_burglary = msg;
+    setBurglary();
 });
 
-// get csv data, turn results into array of objects
-var lines = [];
-function getBurglary(allText) {
-    var allTextLines = allText.split("\r");
-    var headers = allTextLines[0].split("	");
-
-    for (var i=1; i<allTextLines.length; i++) {
-        var data = allTextLines[i].split("	");
-        if (data.length === headers.length) {
-            var tarr = [];
-            for (var j=0; j<headers.length; j++) {
-                tarr[headers[j]]=data[j];
-            }
-            lines.push(tarr);
-        }
-    }
-    // console.log(lines[1]);
-}
-
-
-var markers = [],  // an array of all markers objects
-    markersArr = [], // an array of markers according to types of incidents
-    heatDataAll = [],
-    heatDataTraffic = [],
-    heatDataBurglary = [];
-
-
-
 // set burglary data
-function setBurglary(startDate, endDate) {
+function setBurglary() {
     arr = [];
-    var r1 = lines;
+    var r1 = data_burglary;
     var image = {
         url: 'http://paybefore.com/wp-content/uploads/2016/09/burglar-icon-208x300.png',
         scaledSize: new google.maps.Size(20, 30)
     };
     for (var i = 0; i < r1.length; i++) {
-        var d = r1[i]._date,
-            t = r1[i]._time,
-            hour;
+        var contentString = "Occured: "+r1[i].AlarmDateTime +"</br>" +"Reported: " + r1[i].IncidentReported +
+            "</br>Incident Status: " + r1[i]["Incident Status"] + "</br>Number of Victims: " + r1[i].VICTIM_NO;
+        
+        var latLng = new google.maps.LatLng(r1[i].LATITUDE, r1[i].LONGITUDE),
+            marker = new google.maps.Marker(createMarkerObj(latLng,map,image,contentString));
 
-        if (t.length===4) {
-            hour = t.substring(0,1);
-        } else {
-            hour = t.substring(0,2)
-        }
-        var incident_date = new Date();
-        incident_date.setFullYear(Number(d.substring(0,4)), Number(d.substring(4,6))-1, Number(d.substring(6,8)));
-        incident_date.setHours(hour, 0, 0, 0);
-
-        if (incident_date >= startDate && incident_date <= endDate) {
-            console.log("burglary: "+incident_date);
-
-            var latLng = new google.maps.LatLng(r1[i].LATITUDE, r1[i].LONGITUDE),
-                contentString = "Occured: "+incident_date +"</br>" +"Reported: " + r1[i].IncidentReported,
-                marker = new google.maps.Marker(createMarkerObj(latLng,map,image,contentString));
-
-            heatDataAll.push(latLng);
-            setInfoWindow(marker);
-            arr.push(marker);
-            markers.push(marker);
-        }
+        heatDataAll.push(latLng);
+        setInfoWindow(marker);
+        arr.push(marker);
+        markers.push(marker);
+        
     }
     if (arr.length !== 0) {
         markersArr["Burglary"] = arr;
@@ -216,111 +172,117 @@ function createMarkerObj(position, map, icon, content) {
     return obj;
 }
 
-// set traffic incidents markers
-function setIncident(startDate, endDate) {
-    var months = ["January", "February", "March", "April", "May", "June", "July", "August",
-        "September", "October", "November", "December"];
-    var r = json.incidents;
-    // console.log(Object.keys(r[0]));
 
+// socket
+var data_incidents;
+socket.on('incident_data', function(msg) {
+    // console.log(msg);
+    data_incidents = msg;
+    setIncident();
+});
+
+// set traffic incidents markers
+function setIncident() {
+    var r = data_incidents.incidents;
     var sumOfIncidents = [];
     sumOfIncidents.length=0;
     sumOfIncidents = [0,0,0,0,0,0];  // sum of incidents happened at each level of severity
+    
     var arr = [];
     for (var i = 0; i < r.length; i++) {
-        var hour;
-        var d = r[i].alarmDate;
-        if (d.length === 19) {
-            hour = Number(d.substring(11,13));
+        var latLng = new google.maps.LatLng(r[i]._lat, r[i]._lng);
+        heatDataAll.push(latLng);
+        var content = '<b>Incident Number: </b>' + r[i].incidentNumber +
+            '</br><b>Alarm Date: </b>' + r[i].alarmDate +
+            '</br><b>Location: </b>' + r[i].streetNumber + " " + r[i].streetPrefix + " "
+            + r[i].streetName + " " + r[i].streetSuffix + " " + r[i].streetType + ", "
+            + r[i].city + ", " + r[i].county + ", TN" +
+            '</br><b>EMD Card Number: </b>' + r[i].emdCardNumber +
+            '</br><b>Fire Zone: </b>' + r[i].fireZone +
+            '</br>Object Id: ' + r[i]._id;
+        content = content.replace(/na/g, "");
+
+        var marker;
+        var severity = "ABCDE",
+            colors = ['#00a6ff', '#bbec26', '#ffe12f', '#ff9511', '#ff0302'];
+        
+        /* emdCardNumber is a digit that has length [3,5], the letter in between is the response determinant,
+         * a.k.a, the level of severity; or it has the value of "ctran" or "dupont"*/
+        var emdCardNumber = r[i].emdCardNumber;
+        var responseDeterminant;
+        if (emdCardNumber === "CTRAN") {
+            responseDeterminant = "A"
+        } else if (emdCardNumber === "DUPONT") {
+            responseDeterminant = "F"
         } else {
-            hour = Number(d.substring(11,12));
-        }
-
-        var incident_date = new Date();
-        incident_date.setFullYear(Number(r[i].year), months.indexOf(r[i].month), Number(r[i].day));
-        incident_date.setHours(hour,0,0,0);
-
-
-        if (incident_date >= startDate && incident_date <= endDate) {
-            console.log("accident: "+incident_date);
-
-            var latLng = new google.maps.LatLng(r[i]._lat, r[i]._lng);
-            heatDataAll.push(latLng);
-            var content = '<b>Incident Number: </b>' + r[i].incidentNumber +
-                '</br><b>Alarm Date: </b>' + r[i].alarmDate +
-                '</br><b>Location: </b>' + r[i].streetNumber + " " + r[i].streetPrefix + " "
-                + r[i].streetName + " " + r[i].streetSuffix + " " + r[i].streetType + ", "
-                + r[i].city + ", " + r[i].county + ", " + r[i].state + " " + Math.round(r[i].zipCode) +
-                '</br><b>Severity: </b>' + r[i].severity +
-                '</br><b>Closest Station: </b>' + r[i].closestStation +
-                '</br>Object Id: ' + r[i]._id;
-
-            var severity = "ABCDE";
-            var marker;
-            var colors = ['#00a6ff', '#bbec26', '#ffe12f', '#ff9511', '#ff0302'];
-            content = content.replace(/nan/g, "");
-            var indexABCDE = severity.indexOf(r[i].severity);
-
-            var imgCardiac = {
-                url: 'https://cdn1.iconfinder.com/data/icons/medicine-healthcare-disease/100/07-512.png',
-                scaledSize: new google.maps.Size(20, 20)
-                },
-                imgTrauma = {
-                    url: 'https://cdn3.iconfinder.com/data/icons/health-medicine/512/Injury-512.png',
-                    scaledSize: new google.maps.Size(20, 30)
-                },
-                imgMVA = {
-                    url: 'https://image.flaticon.com/icons/png/128/65/65788.png',
-                    scaledSize: new google.maps.Size(20, 30)
-                },
-                imgFire = {
-                    url: 'https://cdn2.iconfinder.com/data/icons/fire-department/500/burning-512.png',
-                    scaledSize: new google.maps.Size(20, 30)
-                };
-
-            // if severity is known:
-            if (indexABCDE > -1) {
-                sumOfIncidents[indexABCDE]++;
-                marker = new google.maps.Marker({
-                    position: latLng,
-                    map: map,
-                    icon: {
-                        path: google.maps.SymbolPath.CIRCLE,
-                        fillColor: colors[indexABCDE],
-                        fillOpacity: .9, // number between 0.0 and 1.0, 1.0 means not opaque at all
-                        // scale: Math.pow(1.3, indexABCDE+2)+2,
-                        scale: 5,
-                        strokeColor: 'black',
-                        strokeWeight: .1
-                    },
-                    contentString: content
-                });
-            // if severity is unknown
-            } else {
-                sumOfIncidents[5]++;
-                marker = new google.maps.Marker({
-                    position: latLng,
-                    map: map,
-                    icon: {
-                        path: google.maps.SymbolPath.CIRCLE,
-                        fillColor: '#797A7A',
-                        fillOpacity: .75,
-                        scale: 4,
-                        strokeColor: 'white',
-                        strokeWeight: .1
-                    },
-                    contentString: content
-                });
+            var u = 0;
+            while (u<emdCardNumber.length && severity.indexOf(emdCardNumber.charAt(u))<0) {
+                u++;
             }
-
-            setInfoWindow(marker);
-            arr.push(marker);
-            markers.push(marker);
+            responseDeterminant = emdCardNumber.charAt(u);
         }
+        
+
+        var imgCardiac = {
+            url: 'https://cdn1.iconfinder.com/data/icons/medicine-healthcare-disease/100/07-512.png',
+            scaledSize: new google.maps.Size(20, 20)
+            },
+            imgTrauma = {
+                url: 'https://cdn3.iconfinder.com/data/icons/health-medicine/512/Injury-512.png',
+                scaledSize: new google.maps.Size(20, 30)
+            },
+            imgMVA = {
+                url: 'https://image.flaticon.com/icons/png/128/65/65788.png',
+                scaledSize: new google.maps.Size(20, 30)
+            },
+            imgFire = {
+                url: 'https://cdn2.iconfinder.com/data/icons/fire-department/500/burning-512.png',
+                scaledSize: new google.maps.Size(20, 30)
+            };
+
+        // if severity is known:
+        if (severity.indexOf(responseDeterminant) > -1) {
+            sumOfIncidents[severity.indexOf(responseDeterminant)]++;
+            marker = new google.maps.Marker({
+                position: latLng,
+                map: map,
+                icon: {
+                    path: google.maps.SymbolPath.CIRCLE,
+                    fillColor: colors[severity.indexOf(responseDeterminant)],
+                    fillOpacity: .9, // number between 0.0 and 1.0, 1.0 means not opaque at all
+                    // scale: Math.pow(1.3, responseDeterminant+2)+2,
+                    scale: 5,
+                    strokeColor: 'black',
+                    strokeWeight: .1
+                },
+                contentString: content
+            });
+        // if severity is unknown
+        } else {
+            sumOfIncidents[5]++;
+            marker = new google.maps.Marker({
+                position: latLng,
+                map: map,
+                icon: {
+                    path: google.maps.SymbolPath.CIRCLE,
+                    fillColor: '#797A7A',
+                    fillOpacity: .75,
+                    scale: 4,
+                    strokeColor: 'white',
+                    strokeWeight: .1
+                },
+                contentString: content
+            });
+        }
+
+        setInfoWindow(marker);
+        arr.push(marker);
+        markers.push(marker);
+        
     } // for loop ends
     if (arr.length !== 0) {
-        types.push("Traffic Accidents");
-        markersArr["Traffic Accidents"] = arr;
+        types.push("Incidents");
+        markersArr["Incidents"] = arr;
         markersArr.length++;
         setBar(sumOfIncidents);
     }
@@ -353,27 +315,10 @@ function setInfoWindow(marker) {
     });
 }
 
-/*
- * SET ALL MARKERS
- */
-function setMarkers(startDate, endDate) {
-    document.getElementById('markers').innerHTML = 'Hide Markers';
-    // remove markers from the map, but still keeps them in the array
-    for (var i = 0; i < markers.length; i++) {
-        markers[i].setMap(null);
-    }
-    // delete all by removing reference to them,
-    // so that when user hit "submit" again, previous markers are gone
-    markers = [];
-    markers.length = 0;
-    heatDataAll.length = 0;
-    markersArr = [];
-    markersArr.length = 0;
-    console.log("markersArr length:   "+ markersArr.length+ "\n   "+markersArr);
-    setIncident(startDate,endDate);
-    setBurglary(startDate, endDate);
-    console.log(markersArr); // should look like [Traffic Accidents: Array(x), Burglary: Array(y)]
-
+// socket after markers are drawn on map
+socket.on('markers-success', function() {
+    console.log("-->All markers success")
+    console.log(markersArr); // should look like [Incidents: Array(x), Burglary: Array(y)]
     var arr = [['Types', 'Number']];
     for (var j=0; j<types.length; j++) {
         var a = [];
@@ -383,13 +328,15 @@ function setMarkers(startDate, endDate) {
     }
     console.log(arr);
 
+    // set up pie chart
     google.charts.load('current', {packages: ['corechart']});
     google.charts.setOnLoadCallback(function() {
         setPie(arr);
     });
 
     printSummary();
-}
+});
+
 
 /* print a summary of total of incidents,
  * generate checkbox for each type of incidents
@@ -424,7 +371,6 @@ function printSummary() {
 }
 
 // Hide or Show markers according to user check box
-
 function getType() {
     for (var i=0; i<types.length; i++) {
         console.log(types[i]+ ": "+ document.getElementById(types[i]).checked);
@@ -561,7 +507,7 @@ function setPie(arr) {
     };
     var chart = new google.visualization.PieChart(document.getElementById('pieForType'));
     chart.draw(data, options);
-    console.log("set");
+    console.log("-->pie chart success");
 }
 
 // can't clear current canvas

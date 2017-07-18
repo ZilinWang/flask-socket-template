@@ -7,4 +7,3 @@ socketio = SocketIO(app)
 
 
 from myapp import views
-# from myapp import models_database
